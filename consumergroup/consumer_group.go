@@ -329,15 +329,34 @@ func (cg *ConsumerGroup) partitionConsumer(topic string, partition int32, messag
 	default:
 	}
 
-	err := cg.instance.ClaimPartition(topic, partition)
+	// Backoff to handle race condition.
+	var err error
+	for backoff := 0; backoff < 30; backoff++ {
+		err = cg.instance.ClaimPartition(topic, partition)
+		if err == nil || err != kazoo.ErrPartitionClaimedByOther {
+			break
+		}
+		time.Sleep(1 * time.Second)
+	}
 	if err != nil {
+		errors <- &sarama.ConsumerError{
+			Topic: topic,
+			Partition: partition,
+			Err: err,
+		}
 		cg.Logf("%s/%d :: FAILED to claim the partition: %s\n", topic, partition, err)
 		return
 	}
+
 	defer cg.instance.ReleasePartition(topic, partition)
 
 	nextOffset, err := cg.offsetManager.InitializePartition(topic, partition)
 	if err != nil {
+		errors <- &sarama.ConsumerError{
+			Topic: topic,
+			Partition: partition,
+			Err: err,
+		}
 		cg.Logf("%s/%d :: FAILED to determine initial offset: %s\n", topic, partition, err)
 		return
 	}
@@ -355,6 +374,11 @@ func (cg *ConsumerGroup) partitionConsumer(topic string, partition int32, messag
 
 	consumer, err := cg.consumer.ConsumePartition(topic, partition, nextOffset)
 	if err != nil {
+		errors <- &sarama.ConsumerError{
+			Topic: topic,
+			Partition: partition,
+			Err: err,
+		}
 		cg.Logf("%s/%d :: FAILED to start partition consumer: %s\n", topic, partition, err)
 		return
 	}
