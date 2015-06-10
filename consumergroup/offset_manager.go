@@ -25,7 +25,7 @@ type OffsetManager interface {
 	// processes events serially, but this cannot be guaranteed if the consumer does any
 	// asynchronous processing. This can be handled in various ways, e.g. by only accepting
 	// offsets that are higehr than the offsets seen before for the same partition.
-	MarkAsProcessed(topic string, partition int32, offset int64) bool
+	MarkAsProcessed(topic string, partition int32, offset int64) (bool, error)
 
 	// FinalizePartition is called when the consumergroup is done consuming a
 	// partition. In this method, the offset manager can flush any remaining offsets to its
@@ -146,10 +146,15 @@ func (zom *zookeeperOffsetManager) FinalizePartition(topic string, partition int
 	return nil
 }
 
-func (zom *zookeeperOffsetManager) MarkAsProcessed(topic string, partition int32, offset int64) bool {
+func (zom *zookeeperOffsetManager) MarkAsProcessed(topic string, partition int32, offset int64) (bool, error) {
 	zom.l.RLock()
 	defer zom.l.RUnlock()
-	return zom.offsets[topic][partition].markAsProcessed(offset)
+	result,err := zom.offsets[topic][partition].markAsProcessed(offset)
+	if err != nil {
+		zom.cg.Logf("FAILED to mark offset %d for %s/%d as processed!", offset, topic, partition)
+	}
+
+	return result, err
 }
 
 func (zom *zookeeperOffsetManager) Close() error {
@@ -219,7 +224,10 @@ func (zom *zookeeperOffsetManager) commitOffset(topic string, partition int32, t
 
 // MarkAsProcessed marks the provided offset as highest processed offset if
 // it's higehr than any previous offset it has received.
-func (pot *partitionOffsetTracker) markAsProcessed(offset int64) bool {
+func (pot *partitionOffsetTracker) markAsProcessed(offset int64) (bool, error) {
+	if pot == nil {
+		return false, errors.New("Tried to mark offset as processed on closed partition.")
+	}
 	pot.l.Lock()
 	defer pot.l.Unlock()
 	if offset > pot.highestProcessedOffset {
@@ -227,9 +235,9 @@ func (pot *partitionOffsetTracker) markAsProcessed(offset int64) bool {
 		if pot.waitingForOffset == pot.highestProcessedOffset {
 			close(pot.done)
 		}
-		return true
+		return true, nil
 	} else {
-		return false
+		return false, nil
 	}
 }
 

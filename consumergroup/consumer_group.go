@@ -228,8 +228,8 @@ func (cg *ConsumerGroup) Logf(format string, args ...interface{}) {
 }
 
 func (cg *ConsumerGroup) CommitUpto(message *sarama.ConsumerMessage) error {
-	cg.offsetManager.MarkAsProcessed(message.Topic, message.Partition, message.Offset)
-	return nil
+	_, err := cg.offsetManager.MarkAsProcessed(message.Topic, message.Partition, message.Offset)
+	return err
 }
 
 func (cg *ConsumerGroup) topicListConsumer(topics []string) {
@@ -336,6 +336,7 @@ func (cg *ConsumerGroup) partitionConsumer(topic string, partition int32, messag
 		if err == nil || err != kazoo.ErrPartitionClaimedByOther {
 			break
 		}
+		cg.Logf("%s/%d :: Backing off claim to the partition.\n", topic, partition)
 		time.Sleep(1 * time.Second)
 	}
 	if err != nil {
