@@ -243,6 +243,11 @@ func (cg *ConsumerGroup) topicListConsumer(topics []string) {
 		consumers, consumerChanges, err := cg.group.WatchInstances()
 		if err != nil {
 			cg.Logf("FAILED to get list of registered consumer instances: %s\n", err)
+			cg.errors <- &sarama.ConsumerError{
+				Topic:     "",
+				Partition: -1,
+				Err:       err,
+			}
 			return
 		}
 
@@ -341,9 +346,9 @@ func (cg *ConsumerGroup) partitionConsumer(topic string, partition int32, messag
 	}
 	if err != nil {
 		errors <- &sarama.ConsumerError{
-			Topic: topic,
+			Topic:     topic,
 			Partition: partition,
-			Err: err,
+			Err:       err,
 		}
 		cg.Logf("%s/%d :: FAILED to claim the partition: %s\n", topic, partition, err)
 		return
@@ -354,9 +359,9 @@ func (cg *ConsumerGroup) partitionConsumer(topic string, partition int32, messag
 	nextOffset, err := cg.offsetManager.InitializePartition(topic, partition)
 	if err != nil {
 		errors <- &sarama.ConsumerError{
-			Topic: topic,
+			Topic:     topic,
 			Partition: partition,
-			Err: err,
+			Err:       err,
 		}
 		cg.Logf("%s/%d :: FAILED to determine initial offset: %s\n", topic, partition, err)
 		return
@@ -376,9 +381,9 @@ func (cg *ConsumerGroup) partitionConsumer(topic string, partition int32, messag
 	consumer, err := cg.consumer.ConsumePartition(topic, partition, nextOffset)
 	if err != nil {
 		errors <- &sarama.ConsumerError{
-			Topic: topic,
+			Topic:     topic,
 			Partition: partition,
-			Err: err,
+			Err:       err,
 		}
 		cg.Logf("%s/%d :: FAILED to start partition consumer: %s\n", topic, partition, err)
 		return
@@ -421,5 +426,10 @@ partitionConsumerLoop:
 	cg.Logf("%s/%d :: Stopping partition consumer at offset %d\n", topic, partition, lastOffset)
 	if err := cg.offsetManager.FinalizePartition(topic, partition, lastOffset, cg.config.Offsets.ProcessingTimeout); err != nil {
 		cg.Logf("%s/%d :: %s\n", topic, partition, err)
+		errors <- &sarama.ConsumerError{
+			Topic:     topic,
+			Partition: partition,
+			Err:       err,
+		}
 	}
 }

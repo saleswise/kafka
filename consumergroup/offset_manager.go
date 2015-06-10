@@ -3,6 +3,7 @@ package consumergroup
 import (
 	"errors"
 	"fmt"
+	"gopkg.in/Shopify/sarama.v1"
 	"sync"
 	"time"
 )
@@ -185,7 +186,13 @@ func (zom *zookeeperOffsetManager) offsetCommitter() {
 			close(zom.closed)
 			return
 		case <-commitTicker.C:
-			zom.commitOffsets()
+			if err := zom.commitOffsets(); err != nil {
+				zom.cg.errors <- &sarama.ConsumerError{
+					Topic:     "",
+					Partition: -1,
+					Err:       err,
+				}
+			}
 		}
 	}
 }
