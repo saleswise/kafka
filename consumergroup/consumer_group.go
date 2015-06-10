@@ -72,7 +72,8 @@ type ConsumerGroup struct {
 	wg             sync.WaitGroup
 	singleShutdown sync.Once
 
-	messages chan *sarama.ConsumerMessage
+	// messages is a slice of channels, one per stream
+	messages []chan *sarama.ConsumerMessage
 	errors   chan *sarama.ConsumerError
 	stopper  chan struct{}
 
@@ -83,6 +84,10 @@ type ConsumerGroup struct {
 
 // Connects to a consumer group, using Zookeeper for auto-discovery
 func JoinConsumerGroup(name string, topics []string, zookeeper []string, config *Config) (cg *ConsumerGroup, err error) {
+	return JoinConsumerGroupWithStreams(name, topics, 1, zookeeper, config)
+}
+
+func JoinConsumerGroupWithStreams(name string, topics []string, streamCount int, zookeeper []string, config *Config) (cg *ConsumerGroup, err error) {
 
 	if name == "" {
 		return nil, sarama.ConfigurationError("Empty consumergroup name")
@@ -94,6 +99,10 @@ func JoinConsumerGroup(name string, topics []string, zookeeper []string, config 
 
 	if len(zookeeper) == 0 {
 		return nil, errors.New("You need to provide at least one zookeeper node address!")
+	}
+
+	if streamCount < 1 {
+		return nil, errors.New("You need to have at minimum 1 stream")
 	}
 
 	if config == nil {
@@ -134,9 +143,14 @@ func JoinConsumerGroup(name string, topics []string, zookeeper []string, config 
 		group:    group,
 		instance: instance,
 
-		messages: make(chan *sarama.ConsumerMessage, config.ChannelBufferSize),
+		messages: make([]chan *sarama.ConsumerMessage, streamCount, streamCount),
 		errors:   make(chan *sarama.ConsumerError, config.ChannelBufferSize),
 		stopper:  make(chan struct{}),
+	}
+
+	// Create a messages channel per stream
+	for i := 0; i < cap(cg.messages); i++ {
+		cg.messages[i] = make(chan *sarama.ConsumerMessage, config.ChannelBufferSize)
 	}
 
 	// Register consumer group
@@ -173,7 +187,15 @@ func JoinConsumerGroup(name string, topics []string, zookeeper []string, config 
 
 // Returns a channel that you can read to obtain events from Kafka to process.
 func (cg *ConsumerGroup) Messages() <-chan *sarama.ConsumerMessage {
-	return cg.messages
+	return cg.messages[0]
+}
+
+func (cg *ConsumerGroup) Stream(i int) (<-chan *sarama.ConsumerMessage, error) {
+	if i >= len(cg.messages) || i < 0 {
+		return nil, errors.New("Requested stream number is out-of-bounds")
+	}
+
+	return cg.messages[i], nil
 }
 
 // Returns a channel that you can read to obtain events from Kafka to process.
@@ -209,7 +231,9 @@ func (cg *ConsumerGroup) Close() error {
 			cg.Logf("FAILED closing the Sarama client: %s\n", shutdownError)
 		}
 
-		close(cg.messages)
+		for _, messages := range cg.messages {
+			close(messages)
+		}
 		close(cg.errors)
 		cg.instance = nil
 	})
@@ -237,6 +261,11 @@ func (cg *ConsumerGroup) CommitUpto(message *sarama.ConsumerMessage) error {
 }
 
 func (cg *ConsumerGroup) topicListConsumer(topics []string) {
+	writeOnlyMessages := make([]chan<- *sarama.ConsumerMessage, len(cg.messages), len(cg.messages))
+	for i, ch := range cg.messages {
+		writeOnlyMessages[i] = ch
+	}
+
 	for {
 		select {
 		case <-cg.stopper:
@@ -257,7 +286,7 @@ func (cg *ConsumerGroup) topicListConsumer(topics []string) {
 
 		for _, topic := range topics {
 			cg.wg.Add(1)
-			go cg.topicConsumer(topic, cg.messages, cg.errors, stopper)
+			go cg.topicConsumer(topic, writeOnlyMessages, cg.errors, stopper)
 		}
 
 		select {
@@ -273,7 +302,7 @@ func (cg *ConsumerGroup) topicListConsumer(topics []string) {
 	}
 }
 
-func (cg *ConsumerGroup) topicConsumer(topic string, messages chan<- *sarama.ConsumerMessage, errors chan<- *sarama.ConsumerError, stopper <-chan struct{}) {
+func (cg *ConsumerGroup) topicConsumer(topic string, messages []chan<- *sarama.ConsumerMessage, errors chan<- *sarama.ConsumerError, stopper <-chan struct{}) {
 	defer cg.wg.Done()
 
 	select {
@@ -311,12 +340,15 @@ func (cg *ConsumerGroup) topicConsumer(topic string, messages chan<- *sarama.Con
 	myPartitions := dividedPartitions[cg.instance.ID]
 	cg.Logf("%s :: Claiming %d of %d partitions", topic, len(myPartitions), len(partitionLeaders))
 
+	partitionStreamAssignments := dividePbetweenC(len(myPartitions), len(cg.messages))
+
 	// Consume all the assigned partitions
 	var wg sync.WaitGroup
-	for _, pid := range myPartitions {
+	for i, pid := range myPartitions {
 
 		wg.Add(1)
-		go cg.partitionConsumer(topic, pid.ID, messages, errors, &wg, stopper)
+		streamMessages := messages[partitionStreamAssignments[i]]
+		go cg.partitionConsumer(topic, pid.ID, streamMessages, errors, &wg, stopper)
 	}
 
 	wg.Wait()

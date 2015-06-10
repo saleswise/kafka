@@ -36,11 +36,22 @@ func dividePartitionsBetweenConsumers(consumers kazoo.ConsumergroupInstanceList,
 	sort.Sort(partitions)
 	sort.Sort(consumers)
 
+	assignments := dividePbetweenC(plen, clen)
+	for p, c := range assignments {
+		result[consumers[c].ID] = append(result[consumers[c].ID], partitions[p].partition)
+	}
+
+	return result
+}
+
+func dividePbetweenC(plen, clen int) (assignments []int) {
+	assignments = make([]int, plen, plen)
+
 	n := plen / clen
 	if plen%clen > 0 {
 		n++
 	}
-	for i, consumer := range consumers {
+	for i := 0; i < clen; i++ {
 		first := i * n
 		if first > plen {
 			first = plen
@@ -51,12 +62,12 @@ func dividePartitionsBetweenConsumers(consumers kazoo.ConsumergroupInstanceList,
 			last = plen
 		}
 
-		for _, pl := range partitions[first:last] {
-			result[consumer.ID] = append(result[consumer.ID], pl.partition)
+		for p := first; p < last; p++ {
+			assignments[p] = i
 		}
 	}
 
-	return result
+	return
 }
 
 type partitionLeader struct {
