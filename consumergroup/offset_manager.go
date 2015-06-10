@@ -42,7 +42,8 @@ type OffsetManager interface {
 }
 
 var (
-	UncleanClose = errors.New("Not all offsets were committed before shutdown was completed")
+	UncleanClose    = errors.New("Not all offsets were committed before shutdown was completed")
+	PartitionClosed = errors.New("Tried to mark offset as processed on closed partition.")
 )
 
 // OffsetManagerConfig holds configuration setting son how the offset manager should behave.
@@ -149,7 +150,7 @@ func (zom *zookeeperOffsetManager) FinalizePartition(topic string, partition int
 func (zom *zookeeperOffsetManager) MarkAsProcessed(topic string, partition int32, offset int64) (bool, error) {
 	zom.l.RLock()
 	defer zom.l.RUnlock()
-	result,err := zom.offsets[topic][partition].markAsProcessed(offset)
+	result, err := zom.offsets[topic][partition].markAsProcessed(offset)
 	if err != nil {
 		zom.cg.Logf("FAILED to mark offset %d for %s/%d as processed!", offset, topic, partition)
 	}
@@ -226,7 +227,7 @@ func (zom *zookeeperOffsetManager) commitOffset(topic string, partition int32, t
 // it's higehr than any previous offset it has received.
 func (pot *partitionOffsetTracker) markAsProcessed(offset int64) (bool, error) {
 	if pot == nil {
-		return false, errors.New("Tried to mark offset as processed on closed partition.")
+		return false, PartitionClosed
 	}
 	pot.l.Lock()
 	defer pot.l.Unlock()
