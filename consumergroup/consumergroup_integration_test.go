@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	TopicWithSinglePartition    = "consumergroup.single"
-	TopicWithMultiplePartitions = "consumergroup.multi"
+	TopicWithSinglePartition    = "test.1"
+	TopicWithMultiplePartitions = "test.4"
 )
 
 var (
@@ -191,12 +191,12 @@ func TestSingleTopicSingleConsumerStream(t *testing.T) {
 
 	offsets := make(OffsetMap)
 
-	consumer, err := JoinConsumerGroupWithStreams(consumerGroup, []string{TopicWithSinglePartition}, 1, zookeeperPeers, nil)
+	consumer, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithSinglePartition: 1}, zookeeperPeers, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	messages, err := consumer.Stream(0)
+	messages, err := consumer.Stream(TopicWithSinglePartition, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,17 +210,17 @@ func TestSingleTopicMultipleConsumerStreams(t *testing.T) {
 	setupZookeeper(t, consumerGroup, TopicWithSinglePartition, 1)
 	go produceEvents(t, consumerGroup, TopicWithSinglePartition, 200)
 
-	consumer, err := JoinConsumerGroupWithStreams(consumerGroup, []string{TopicWithSinglePartition}, 2, zookeeperPeers, nil)
+	consumer, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithSinglePartition: 2}, zookeeperPeers, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events1, err := consumer.Stream(0)
+	events1, err := consumer.Stream(TopicWithSinglePartition, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events2, err := consumer.Stream(1)
+	events2, err := consumer.Stream(TopicWithSinglePartition, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,17 +270,17 @@ func TestSingleTopicMultipleConsumerStreamsMultiplePartitions(t *testing.T) {
 	setupZookeeper(t, consumerGroup, TopicWithMultiplePartitions, 4)
 	go produceEvents(t, consumerGroup, TopicWithMultiplePartitions, 200)
 
-	consumer, err := JoinConsumerGroupWithStreams(consumerGroup, []string{TopicWithMultiplePartitions}, 2, zookeeperPeers, nil)
+	consumer, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithMultiplePartitions: 2}, zookeeperPeers, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events1, err := consumer.Stream(0)
+	events1, err := consumer.Stream(TopicWithMultiplePartitions, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events2, err := consumer.Stream(1)
+	events2, err := consumer.Stream(TopicWithMultiplePartitions, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,17 +332,17 @@ func TestMultipleTopicsMultipleConsumerStreams(t *testing.T) {
 	go produceEvents(t, consumerGroup, TopicWithSinglePartition, 20)
 	go produceEvents(t, consumerGroup, TopicWithMultiplePartitions, 200)
 
-	consumer, err := JoinConsumerGroupWithStreams(consumerGroup, []string{TopicWithSinglePartition, TopicWithMultiplePartitions}, 2, zookeeperPeers, nil)
+	consumer, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithSinglePartition: 1, TopicWithMultiplePartitions: 1}, zookeeperPeers, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events1, err := consumer.Stream(0)
+	events1, err := consumer.Stream(TopicWithSinglePartition, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events2, err := consumer.Stream(1)
+	events2, err := consumer.Stream(TopicWithMultiplePartitions, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,45 +389,22 @@ func TestMultipleTopicsMultipleConsumerStreams(t *testing.T) {
 	consumer.Close()
 }
 
-func TestMultipleTopicsSingleConsumerStream(t *testing.T) {
-	consumerGroup := "TestMultipleTopicsSingleConsumerStream"
-	setupZookeeper(t, consumerGroup, TopicWithSinglePartition, 1)
-	setupZookeeper(t, consumerGroup, TopicWithMultiplePartitions, 4)
-	go produceEvents(t, consumerGroup, TopicWithSinglePartition, 20)
-	go produceEvents(t, consumerGroup, TopicWithMultiplePartitions, 200)
-
-	consumer, err := JoinConsumerGroupWithStreams(consumerGroup, []string{TopicWithSinglePartition, TopicWithMultiplePartitions}, 1, zookeeperPeers, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	messages, err := consumer.Stream(0)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var offsets = make(OffsetMap)
-	assertEvents(t, consumer, 220, offsets, messages)
-
-	consumer.Close()
-}
-
 func TestSingleTopicMultipleConsumersMultipleConsumerStream(t *testing.T) {
 	consumerGroup := "TestSingleTopicMultipleConsumersMultipleConsumerStream"
 	setupZookeeper(t, consumerGroup, TopicWithMultiplePartitions, 4)
 	go produceEvents(t, consumerGroup, TopicWithMultiplePartitions, 200)
 
-	consumer1, err := JoinConsumerGroupWithStreams(consumerGroup, []string{TopicWithMultiplePartitions}, 2, zookeeperPeers, nil)
+	consumer1, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithMultiplePartitions: 2}, zookeeperPeers, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events1, err := consumer1.Stream(0)
+	events1, err := consumer1.Stream(TopicWithMultiplePartitions, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	events2, err := consumer1.Stream(1)
+	events2, err := consumer1.Stream(TopicWithMultiplePartitions, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
