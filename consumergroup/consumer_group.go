@@ -98,6 +98,9 @@ func JoinConsumerGroup(name string, topics []string, zookeeper []string, config 
 	}
 
 	cg, _, err = joinConsumerGroupWithStreams(name, topics, topicStreamMap, zookeeper, config)
+	if err != nil {
+		return nil, err
+	}
 	cg.manyChannels = false
 	return cg, err
 }
@@ -124,6 +127,9 @@ func JoinConsumerGroupWithStreams(name string, topicStreams map[string]int, zook
 	}
 
 	cg, s, err := joinConsumerGroupWithStreams(name, topics, messages, zookeeper, config)
+	if err != nil {
+		return nil, nil, err
+	}
 	cg.manyChannels = true
 	return cg, s, err
 }
