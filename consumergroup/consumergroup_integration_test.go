@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	TopicWithSinglePartition    = "consumergroup.single"
-	TopicWithMultiplePartitions = "consumergroup.multi"
+	TopicWithSinglePartition    = "test.1"
+	TopicWithMultiplePartitions = "test.4"
 )
 
 var (
@@ -92,7 +92,7 @@ func TestIntegrationMultipleTopicsSingleConsumer(t *testing.T) {
 	defer consumer.Close()
 
 	var offsets = make(OffsetMap)
-	assertEvents(t, consumer, 300, offsets)
+	assertEvents(t, consumer, 300, offsets, consumer.Messages())
 }
 
 func TestIntegrationSingleTopicParallelConsumers(t *testing.T) {
@@ -124,7 +124,7 @@ func TestIntegrationSingleTopicParallelConsumers(t *testing.T) {
 		}
 
 		if offsets[message.Partition] != 0 && offsets[message.Partition]+1 != message.Offset {
-			t.Fatalf("Unecpected offset on partition %d. Expected %d, got %d.", message.Partition, offsets[message.Partition]+1, message.Offset)
+			t.Fatalf("Unexpected offset on partition %d. Expected %d, got %d.", message.Partition, offsets[message.Partition]+1, message.Offset)
 		}
 
 		offsets[message.Partition] = message.Offset
@@ -172,7 +172,7 @@ func TestSingleTopicSequentialConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertEvents(t, consumer1, 10, offsets)
+	assertEvents(t, consumer1, 10, offsets, consumer1.Messages())
 	consumer1.Close()
 
 	consumer2, err := JoinConsumerGroup(consumerGroup, []string{TopicWithSinglePartition}, zookeeperPeers, nil)
@@ -180,7 +180,285 @@ func TestSingleTopicSequentialConsumer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertEvents(t, consumer2, 10, offsets)
+	assertEvents(t, consumer2, 10, offsets, consumer2.Messages())
+	consumer2.Close()
+}
+
+func TestSingleTopicSingleConsumerStream(t *testing.T) {
+	consumerGroup := "TestSingleTopicSingleConsumerStream"
+	setupZookeeper(t, consumerGroup, TopicWithSinglePartition, 1)
+	go produceEvents(t, consumerGroup, TopicWithSinglePartition, 20)
+
+	offsets := make(OffsetMap)
+
+	consumer, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithSinglePartition: 1}, zookeeperPeers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	messages, err := consumer.Stream(TopicWithSinglePartition, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertEvents(t, consumer, 20, offsets, messages)
+	consumer.Close()
+}
+
+func TestSingleTopicMultipleConsumerStreams(t *testing.T) {
+	consumerGroup := "TestSingleTopicMultipleConsumerStreams"
+	setupZookeeper(t, consumerGroup, TopicWithSinglePartition, 1)
+	go produceEvents(t, consumerGroup, TopicWithSinglePartition, 200)
+
+	consumer, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithSinglePartition: 2}, zookeeperPeers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events1, err := consumer.Stream(TopicWithSinglePartition, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events2, err := consumer.Stream(TopicWithSinglePartition, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var eventCount1, eventCount2 int64
+	offsets := make(map[int32]int64)
+
+	handleEvent := func(message *sarama.ConsumerMessage, ok bool) {
+		if !ok {
+			t.Fatal("Event stream closed prematurely")
+		}
+
+		if offsets[message.Partition] != 0 && offsets[message.Partition]+1 != message.Offset {
+			t.Fatalf("Unexpected offset on partition %d. Expected %d, got %d.", message.Partition, offsets[message.Partition]+1, message.Offset)
+		}
+
+		offsets[message.Partition] = message.Offset
+	}
+
+	for eventCount1+eventCount2 < 200 {
+		select {
+		case <-time.After(10 * time.Second):
+			t.Fatal("Reader timeout")
+
+		case event1, ok1 := <-events1:
+			handleEvent(event1, ok1)
+			eventCount1 += 1
+			consumer.CommitUpto(event1)
+
+		case event2, ok2 := <-events2:
+			handleEvent(event2, ok2)
+			eventCount2 += 1
+			consumer.CommitUpto(event2)
+		}
+	}
+
+	if eventCount1 == 0 || eventCount2 == 0 {
+		t.Logf("Successfully read %d and %d messages, closing!", eventCount1, eventCount2)
+	} else {
+		t.Error("Expected events to be consumed by only one consumer stream!")
+	}
+	consumer.Close()
+}
+
+func TestSingleTopicMultipleConsumerStreamsMultiplePartitions(t *testing.T) {
+	consumerGroup := "TestSingleTopicMultipleConsumerStreamsMultiplePartitions"
+	setupZookeeper(t, consumerGroup, TopicWithMultiplePartitions, 4)
+	go produceEvents(t, consumerGroup, TopicWithMultiplePartitions, 200)
+
+	consumer, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithMultiplePartitions: 2}, zookeeperPeers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events1, err := consumer.Stream(TopicWithMultiplePartitions, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events2, err := consumer.Stream(TopicWithMultiplePartitions, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var eventCount1, eventCount2 int64
+	offsets := make(map[int32]int64)
+
+	handleEvent := func(message *sarama.ConsumerMessage, ok bool) {
+		if !ok {
+			t.Fatal("Event stream closed prematurely")
+		}
+
+		if offsets[message.Partition] != 0 && offsets[message.Partition]+1 != message.Offset {
+			t.Fatalf("Unexpected offset on partition %d. Expected %d, got %d.", message.Partition, offsets[message.Partition]+1, message.Offset)
+		}
+
+		offsets[message.Partition] = message.Offset
+	}
+
+	for eventCount1+eventCount2 < 200 {
+		select {
+		case <-time.After(10 * time.Second):
+			t.Fatal("Reader timeout")
+
+		case event1, ok1 := <-events1:
+			handleEvent(event1, ok1)
+			eventCount1 += 1
+			consumer.CommitUpto(event1)
+
+		case event2, ok2 := <-events2:
+			handleEvent(event2, ok2)
+			eventCount2 += 1
+			consumer.CommitUpto(event2)
+		}
+	}
+
+	if eventCount1 == 0 || eventCount2 == 0 {
+		t.Error("Expected events to be consumed by both consumer streams!")
+	} else {
+		t.Logf("Successfully read %d and %d messages, closing!", eventCount1, eventCount2)
+	}
+	consumer.Close()
+}
+
+func TestMultipleTopicsMultipleConsumerStreams(t *testing.T) {
+	consumerGroup := "TestMultipleTopicsMultipleConsumerStreams"
+	setupZookeeper(t, consumerGroup, TopicWithSinglePartition, 1)
+	setupZookeeper(t, consumerGroup, TopicWithMultiplePartitions, 4)
+	go produceEvents(t, consumerGroup, TopicWithSinglePartition, 20)
+	go produceEvents(t, consumerGroup, TopicWithMultiplePartitions, 200)
+
+	consumer, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithSinglePartition: 1, TopicWithMultiplePartitions: 1}, zookeeperPeers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events1, err := consumer.Stream(TopicWithSinglePartition, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events2, err := consumer.Stream(TopicWithMultiplePartitions, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var eventCount1, eventCount2 int64
+	offsets := make(map[string]map[int32]int64)
+	offsets[TopicWithMultiplePartitions] = make(map[int32]int64)
+	offsets[TopicWithSinglePartition] = make(map[int32]int64)
+
+	handleEvent := func(message *sarama.ConsumerMessage, ok bool) {
+		if !ok {
+			t.Fatal("Event stream closed prematurely")
+		}
+
+		if offsets[message.Topic][message.Partition] != 0 && offsets[message.Topic][message.Partition]+1 != message.Offset {
+			t.Fatalf("Unexpected offset on topic %s, partition %d. Expected %d, got %d.", message.Topic, message.Partition, offsets[message.Topic][message.Partition]+1, message.Offset)
+		}
+
+		offsets[message.Topic][message.Partition] = message.Offset
+	}
+
+	for eventCount1+eventCount2 < 220 {
+		select {
+		case <-time.After(10 * time.Second):
+			t.Fatal("Reader timeout")
+
+		case event1, ok1 := <-events1:
+			handleEvent(event1, ok1)
+			eventCount1 += 1
+			consumer.CommitUpto(event1)
+
+		case event2, ok2 := <-events2:
+			handleEvent(event2, ok2)
+			eventCount2 += 1
+			consumer.CommitUpto(event2)
+		}
+	}
+
+	if eventCount1 == 0 || eventCount2 == 0 {
+		t.Error("Expected events to be consumed by both consumer streams!")
+	} else {
+		t.Logf("Successfully read %d and %d messages, closing!", eventCount1, eventCount2)
+	}
+	consumer.Close()
+}
+
+func TestSingleTopicMultipleConsumersMultipleConsumerStream(t *testing.T) {
+	consumerGroup := "TestSingleTopicMultipleConsumersMultipleConsumerStream"
+	setupZookeeper(t, consumerGroup, TopicWithMultiplePartitions, 4)
+	go produceEvents(t, consumerGroup, TopicWithMultiplePartitions, 200)
+
+	consumer1, _, err := JoinConsumerGroupWithStreams(consumerGroup, map[string]int{TopicWithMultiplePartitions: 2}, zookeeperPeers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events1, err := consumer1.Stream(TopicWithMultiplePartitions, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events2, err := consumer1.Stream(TopicWithMultiplePartitions, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	consumer2, err := JoinConsumerGroup(consumerGroup, []string{TopicWithMultiplePartitions}, zookeeperPeers, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events3 := consumer2.Messages()
+
+	var eventCount1, eventCount2, eventCount3 int64
+	offsets := make(map[int32]int64)
+
+	handleEvent := func(message *sarama.ConsumerMessage, ok bool) {
+		if !ok {
+			t.Fatal("Event stream closed prematurely")
+		}
+
+		if offsets[message.Partition] != 0 && offsets[message.Partition]+1 != message.Offset {
+			t.Fatalf("Unexpected offset on partition %d. Expected %d, got %d.", message.Partition, offsets[message.Partition]+1, message.Offset)
+		}
+
+		offsets[message.Partition] = message.Offset
+	}
+
+	for eventCount1+eventCount2+eventCount3 < 200 {
+		select {
+		case <-time.After(10 * time.Second):
+			t.Fatal("Reader timeout")
+
+		case event1, ok1 := <-events1:
+			handleEvent(event1, ok1)
+			eventCount1 += 1
+			consumer1.CommitUpto(event1)
+
+		case event2, ok2 := <-events2:
+			handleEvent(event2, ok2)
+			eventCount2 += 1
+			consumer1.CommitUpto(event2)
+
+		case event3, ok3 := <-events3:
+			handleEvent(event3, ok3)
+			eventCount3 += 1
+			consumer2.CommitUpto(event3)
+		}
+	}
+
+	if eventCount1 == 0 || eventCount2 == 0 || eventCount3 == 0 {
+		t.Error("Expected events to be consumed by both consumer streams and both consumers!")
+	} else {
+		t.Logf("Successfully read %d and %d messages, closing!", eventCount1, eventCount2)
+	}
+	consumer1.Close()
 	consumer2.Close()
 }
 
@@ -190,14 +468,14 @@ func TestSingleTopicSequentialConsumer(t *testing.T) {
 
 type OffsetMap map[string]map[int32]int64
 
-func assertEvents(t *testing.T, cg *ConsumerGroup, count int64, offsets OffsetMap) {
+func assertEvents(t *testing.T, cg *ConsumerGroup, count int64, offsets OffsetMap, messages <-chan *sarama.ConsumerMessage) {
 	var processed int64
 	for processed < count {
 		select {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("Reader timeout after %d events!", processed)
 
-		case message, ok := <-cg.Messages():
+		case message, ok := <-messages:
 			if !ok {
 				t.Fatal("Event stream closed prematurely")
 			}

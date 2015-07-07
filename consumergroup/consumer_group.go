@@ -72,37 +72,86 @@ type ConsumerGroup struct {
 	wg             sync.WaitGroup
 	singleShutdown sync.Once
 
-	// messages is a slice of channels, one per stream
-	messages []chan *sarama.ConsumerMessage
-	errors   chan *sarama.ConsumerError
-	stopper  chan struct{}
+	// messages is a map of topics to message slices, one per stream per topic.
+	messages map[string][]chan *sarama.ConsumerMessage
+
+	errors  chan *sarama.ConsumerError
+	stopper chan struct{}
 
 	consumers kazoo.ConsumergroupInstanceList
 
 	offsetManager OffsetManager
+	manyChannels  bool
 }
 
 // Connects to a consumer group, using Zookeeper for auto-discovery
 func JoinConsumerGroup(name string, topics []string, zookeeper []string, config *Config) (cg *ConsumerGroup, err error) {
-	return JoinConsumerGroupWithStreams(name, topics, 1, zookeeper, config)
+	chanList := make([]chan *sarama.ConsumerMessage, 1, 1)
+	bufSz := 0
+	if config != nil {
+		bufSz = config.ChannelBufferSize
+	}
+	chanList[0] = make(chan *sarama.ConsumerMessage, bufSz)
+	topicStreamMap := make(map[string][]chan *sarama.ConsumerMessage)
+	for _, topic := range topics {
+		topicStreamMap[topic] = chanList
+	}
+
+	cg, _, err = joinConsumerGroupWithStreams(name, topics, topicStreamMap, zookeeper, config)
+	if err != nil {
+		return nil, err
+	}
+	cg.manyChannels = false
+	return cg, err
 }
 
-func JoinConsumerGroupWithStreams(name string, topics []string, streamCount int, zookeeper []string, config *Config) (cg *ConsumerGroup, err error) {
+// Connects to a consumer group, using Zookeeper for auto-discovery, and create a set of streams to topics as per to the provided stream map.
+func JoinConsumerGroupWithStreams(name string, topicStreams map[string]int, zookeeper []string, config *Config) (cg *ConsumerGroup, streams map[string][]<-chan *sarama.ConsumerMessage, err error) {
+	messages := make(map[string][]chan *sarama.ConsumerMessage)
+	topics := make([]string, 0)
+
+	bufSz := 0
+	if config != nil {
+		bufSz = config.ChannelBufferSize
+	}
+
+	// Create message channels per topic.
+	for topic, messageCount := range topicStreams {
+		topics = append(topics, topic)
+		messages[topic] = make([]chan *sarama.ConsumerMessage, messageCount, messageCount)
+
+		// Create a messages channel per stream
+		for i := 0; i < topicStreams[topic]; i++ {
+			messages[topic][i] = make(chan *sarama.ConsumerMessage, bufSz)
+		}
+	}
+
+	cg, s, err := joinConsumerGroupWithStreams(name, topics, messages, zookeeper, config)
+	if err != nil {
+		return nil, nil, err
+	}
+	cg.manyChannels = true
+	return cg, s, err
+}
+
+func joinConsumerGroupWithStreams(name string, topics []string, topicStreams map[string][]chan *sarama.ConsumerMessage, zookeeper []string, config *Config) (cg *ConsumerGroup, streams map[string][]<-chan *sarama.ConsumerMessage, err error) {
 
 	if name == "" {
-		return nil, sarama.ConfigurationError("Empty consumergroup name")
+		return nil, nil, sarama.ConfigurationError("Empty consumergroup name")
 	}
 
 	if len(topics) == 0 {
-		return nil, sarama.ConfigurationError("No topics provided")
+		return nil, nil, sarama.ConfigurationError("No topics provided")
 	}
 
 	if len(zookeeper) == 0 {
-		return nil, errors.New("You need to provide at least one zookeeper node address!")
+		return nil, nil, errors.New("You need to provide at least one zookeeper node address!")
 	}
 
-	if streamCount < 1 {
-		return nil, errors.New("You need to have at minimum 1 stream")
+	for _, streams := range topicStreams {
+		if len(streams) < 1 {
+			return nil, nil, errors.New("You need to have at minimum 1 stream per topic")
+		}
 	}
 
 	if config == nil {
@@ -143,36 +192,40 @@ func JoinConsumerGroupWithStreams(name string, topics []string, streamCount int,
 		group:    group,
 		instance: instance,
 
-		messages: make([]chan *sarama.ConsumerMessage, streamCount, streamCount),
+		messages: make(map[string][]chan *sarama.ConsumerMessage),
 		errors:   make(chan *sarama.ConsumerError, config.ChannelBufferSize),
 		stopper:  make(chan struct{}),
 	}
 
-	// Create a messages channel per stream
-	for i := 0; i < cap(cg.messages); i++ {
-		cg.messages[i] = make(chan *sarama.ConsumerMessage, config.ChannelBufferSize)
+	streams = make(map[string][]<-chan *sarama.ConsumerMessage)
+	for t, l := range topicStreams {
+		streams[t] = make([]<-chan *sarama.ConsumerMessage, len(l), len(l))
+		for i, c := range l {
+			streams[t][i] = c
+		}
 	}
+	cg.messages = topicStreams
 
 	// Register consumer group
 	if exists, err := cg.group.Exists(); err != nil {
 		cg.Logf("FAILED to check for existence of consumergroup: %s!\n", err)
 		_ = consumer.Close()
 		_ = kz.Close()
-		return nil, err
+		return nil, nil, err
 	} else if !exists {
 		cg.Logf("Consumergroup `%s` does not yet exists, creating...\n", cg.group.Name)
 		if err := cg.group.Create(); err != nil {
 			cg.Logf("FAILED to create consumergroup in Zookeeper: %s!\n", err)
 			_ = consumer.Close()
 			_ = kz.Close()
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	// Register itself with zookeeper
 	if err := cg.instance.Register(topics); err != nil {
 		cg.Logf("FAILED to register consumer instance: %s!\n", err)
-		return nil, err
+		return nil, nil, err
 	} else {
 		cg.Logf("Consumer instance registered (%s).", cg.instance.ID)
 	}
@@ -187,15 +240,24 @@ func JoinConsumerGroupWithStreams(name string, topics []string, streamCount int,
 
 // Returns a channel that you can read to obtain events from Kafka to process.
 func (cg *ConsumerGroup) Messages() <-chan *sarama.ConsumerMessage {
-	return cg.messages[0]
+	for _, topic := range cg.messages {
+		return topic[0]
+	}
+
+	return nil
 }
 
-func (cg *ConsumerGroup) Stream(i int) (<-chan *sarama.ConsumerMessage, error) {
-	if i >= len(cg.messages) || i < 0 {
+func (cg *ConsumerGroup) Stream(topic string, i int) (<-chan *sarama.ConsumerMessage, error) {
+	topicMessages, ok := cg.messages[topic]
+	if !ok {
+		return nil, errors.New("Requested topic is not registered against this consumergroup")
+	}
+
+	if i >= len(topicMessages) || i < 0 {
 		return nil, errors.New("Requested stream number is out-of-bounds")
 	}
 
-	return cg.messages[i], nil
+	return topicMessages[i], nil
 }
 
 // Returns a channel that you can read to obtain events from Kafka to process.
@@ -231,8 +293,14 @@ func (cg *ConsumerGroup) Close() error {
 			cg.Logf("FAILED closing the Sarama client: %s\n", shutdownError)
 		}
 
+	CloseChannels:
 		for _, messages := range cg.messages {
-			close(messages)
+			for _, messageCh := range messages {
+				close(messageCh)
+				if !cg.manyChannels {
+					break CloseChannels
+				}
+			}
 		}
 		close(cg.errors)
 		cg.instance = nil
@@ -261,9 +329,12 @@ func (cg *ConsumerGroup) CommitUpto(message *sarama.ConsumerMessage) error {
 }
 
 func (cg *ConsumerGroup) topicListConsumer(topics []string) {
-	writeOnlyMessages := make([]chan<- *sarama.ConsumerMessage, len(cg.messages), len(cg.messages))
-	for i, ch := range cg.messages {
-		writeOnlyMessages[i] = ch
+	writeOnlyMessages := make(map[string][]chan<- *sarama.ConsumerMessage)
+	for v, l := range cg.messages {
+		writeOnlyMessages[v] = make([]chan<- *sarama.ConsumerMessage, len(l), len(l))
+		for i, ch := range l {
+			writeOnlyMessages[v][i] = ch
+		}
 	}
 
 	for {
@@ -286,7 +357,7 @@ func (cg *ConsumerGroup) topicListConsumer(topics []string) {
 
 		for _, topic := range topics {
 			cg.wg.Add(1)
-			go cg.topicConsumer(topic, writeOnlyMessages, cg.errors, stopper)
+			go cg.topicConsumer(topic, writeOnlyMessages[topic], cg.errors, stopper)
 		}
 
 		select {
@@ -340,7 +411,7 @@ func (cg *ConsumerGroup) topicConsumer(topic string, messages []chan<- *sarama.C
 	myPartitions := dividedPartitions[cg.instance.ID]
 	cg.Logf("%s :: Claiming %d of %d partitions", topic, len(myPartitions), len(partitionLeaders))
 
-	partitionStreamAssignments := dividePbetweenC(len(myPartitions), len(cg.messages))
+	partitionStreamAssignments := dividePbetweenC(len(myPartitions), len(messages))
 
 	// Consume all the assigned partitions
 	var wg sync.WaitGroup
