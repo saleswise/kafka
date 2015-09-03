@@ -192,7 +192,7 @@ func joinConsumerGroupWithStreams(name string, topics []string, topicStreams map
 		group:    group,
 		instance: instance,
 
-		messages: make(map[string][]chan *sarama.ConsumerMessage),
+		messages: topicStreams,
 		errors:   make(chan *sarama.ConsumerError, config.ChannelBufferSize),
 		stopper:  make(chan struct{}),
 	}
@@ -204,7 +204,6 @@ func joinConsumerGroupWithStreams(name string, topics []string, topicStreams map
 			streams[t][i] = c
 		}
 	}
-	cg.messages = topicStreams
 
 	// Register consumer group
 	if exists, err := cg.group.Exists(); err != nil {
