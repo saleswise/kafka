@@ -45,6 +45,10 @@ func dividePartitionsBetweenConsumers(consumers kazoo.ConsumergroupInstanceList,
 }
 
 func dividePbetweenC(plen, clen int) (assignments []int) {
+	if clen == 0 {
+		return nil
+	}
+
 	assignments = make([]int, plen, plen)
 
 	n := plen / clen
