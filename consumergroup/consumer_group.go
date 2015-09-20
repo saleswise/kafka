@@ -82,6 +82,8 @@ type ConsumerGroup struct {
 
 	offsetManager OffsetManager
 	manyChannels  bool
+
+	myPartitions map[int32]bool
 }
 
 // Connects to a consumer group, using Zookeeper for auto-discovery
@@ -426,6 +428,12 @@ func (cg *ConsumerGroup) topicConsumer(topic string, messages []chan<- *sarama.C
 		go cg.partitionConsumer(topic, pid.ID, streamMessages, errors, &wg, stopper)
 	}
 
+	myPartitionsMap := make(map[int32]bool)
+	for _, p := range myPartitions {
+		myPartitionsMap[p.ID] = true
+	}
+	cg.myPartitions = myPartitionsMap
+
 	wg.Wait()
 	cg.Logf("%s :: Stopped topic consumer\n", topic)
 }
@@ -538,4 +546,8 @@ partitionConsumerLoop:
 			Err:       err,
 		}
 	}
+}
+
+func (cg *ConsumerGroup) IsMyPartition(id int32) bool {
+	return cg.myPartitions[id]
 }
