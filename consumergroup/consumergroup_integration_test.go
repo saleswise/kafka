@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/wvanbergen/kazoo-go"
-	"gopkg.in/Shopify/sarama.v1"
+	"github.com/Shopify/sarama"
 )
 
 const (
@@ -30,6 +30,10 @@ func init() {
 	}
 	if kafkaPeersEnv := os.Getenv("KAFKA_PEERS"); kafkaPeersEnv != "" {
 		kafkaPeers = strings.Split(kafkaPeersEnv, ",")
+	}
+
+	if os.Getenv("DEBUG") != "" {
+		sarama.Logger = log.New(os.Stdout, "[sarama] ", log.LstdFlags)
 	}
 
 	fmt.Printf("Using Zookeeper cluster at %v\n", zookeeperPeers)
@@ -132,8 +136,8 @@ func TestIntegrationSingleTopicParallelConsumers(t *testing.T) {
 
 	for eventCount1+eventCount2 < 200 {
 		select {
-		case <-time.After(10 * time.Second):
-			t.Fatal("Reader timeout")
+		case <-time.After(15 * time.Second):
+			t.Fatalf("Consumer timeout; read %d instead of %d messages", eventCount1+eventCount2, 200)
 
 		case event1, ok1 := <-events1:
 			handleEvent(event1, ok1)
@@ -490,6 +494,11 @@ func assertEvents(t *testing.T, cg *ConsumerGroup, count int64, offsets OffsetMa
 
 				processed += 1
 				offsets[message.Topic][message.Partition] = message.Offset
+
+				if os.Getenv("DEBUG") != "" {
+					log.Printf("Consumed %d from %s/%d\n", message.Offset, message.Topic, message.Partition)
+				}
+
 				cg.CommitUpto(message)
 			}
 
@@ -515,10 +524,13 @@ func produceEvents(t *testing.T, consumerGroup string, topic string, amount int6
 
 	for i := int64(1); i <= amount; i++ {
 		msg := &sarama.ProducerMessage{Topic: topic, Value: sarama.StringEncoder(fmt.Sprintf("testing %d", i))}
-		_, _, err = producer.SendMessage(msg)
-
+		partition, offset, err := producer.SendMessage(msg)
 		if err != nil {
 			return err
+		}
+
+		if os.Getenv("DEBUG") != "" {
+			log.Printf("Produced message %d to %s/%d.\n", offset, msg.Topic, partition)
 		}
 	}
 

@@ -32,6 +32,9 @@ func dividePartitionsBetweenConsumers(consumers kazoo.ConsumergroupInstanceList,
 
 	plen := len(partitions)
 	clen := len(consumers)
+	if clen == 0 {
+		return result
+	}
 
 	sort.Sort(partitions)
 	sort.Sort(consumers)
@@ -52,23 +55,23 @@ func dividePbetweenC(plen, clen int) (assignments []int) {
 	assignments = make([]int, plen, plen)
 
 	n := plen / clen
-	if plen%clen > 0 {
-		n++
-	}
+	m := plen % clen
+	p := 0
 	for i := 0; i < clen; i++ {
-		first := i * n
-		if first > plen {
-			first = plen
+		first := p
+		last := first + n
+		if m > 0 && i < m {
+			last++
 		}
-
-		last := (i + 1) * n
 		if last > plen {
 			last = plen
 		}
 
-		for p := first; p < last; p++ {
-			assignments[p] = i
+		for part := first; part < last; part++ {
+			assignments[part] = i
 		}
+		
+		p = last
 	}
 
 	return
