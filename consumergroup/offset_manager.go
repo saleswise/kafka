@@ -3,7 +3,7 @@ package consumergroup
 import (
 	"errors"
 	"fmt"
-	"gopkg.in/Shopify/sarama.v1"
+	"github.com/Shopify/sarama"
 	"sync"
 	"time"
 )
