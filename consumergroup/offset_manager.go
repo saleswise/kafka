@@ -160,7 +160,7 @@ func (zom *zookeeperOffsetManager) MarkAsProcessed(topic string, partition int32
 		}
 		return result, err
 	} else {
-		return false, errors.New(fmt.Printf("no partition %d for topic %v", partition, topic))
+		return false, fmt.Errorf("no partition %d for topic %v", partition, topic)
 	}
 }
 
