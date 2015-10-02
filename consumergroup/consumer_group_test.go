@@ -2,7 +2,7 @@ package consumergroup
 
 import (
 	"fmt"
-	"github.com/wvanbergen/kazoo-go"
+	"github.com/saleswise/kazoo-go"
 	"testing"
 )
 

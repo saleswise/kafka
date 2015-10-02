@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/Shopify/sarama"
-	"github.com/wvanbergen/kazoo-go"
+	"github.com/saleswise/kazoo-go"
 )
 
 var (

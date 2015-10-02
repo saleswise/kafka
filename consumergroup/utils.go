@@ -7,7 +7,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/wvanbergen/kazoo-go"
+	"github.com/saleswise/kazoo-go"
 )
 
 func retrievePartitionLeaders(partitions kazoo.PartitionList) (partitionLeaders, error) {
@@ -70,7 +70,7 @@ func dividePbetweenC(plen, clen int) (assignments []int) {
 		for part := first; part < last; part++ {
 			assignments[part] = i
 		}
-		
+
 		p = last
 	}
 
