@@ -372,9 +372,10 @@ func (cg *ConsumerGroup) topicListConsumer(topics []string) {
 			return
 
 		case <-consumerChanges:
-			cg.Logf("Triggering rebalance due to consumer list change\n")
+			cg.Logf("Triggering rebalance due to consumer list change, waiting for shutdown\n")
 			close(stopper)
 			cg.wg.Wait()
+			cg.Logf("Done waiting, continuing with rebalance\n")
 		}
 	}
 }
@@ -415,7 +416,13 @@ func (cg *ConsumerGroup) topicConsumer(topic string, messages []chan<- *sarama.C
 
 	dividedPartitions := dividePartitionsBetweenConsumers(cg.consumers, partitionLeaders)
 	myPartitions := dividedPartitions[cg.instance.ID]
+
 	cg.Logf("%s :: Claiming %d of %d partitions", topic, len(myPartitions), len(partitionLeaders))
+	var myPIDs []int32
+	for _, p := range myPartitions {
+		myPIDs = append(myPIDs, p.ID)
+	}
+	cg.Logf("%s :: My partition IDs: %v", topic, myPIDs)
 
 	partitionStreamAssignments := dividePbetweenC(len(myPartitions), len(messages))
 
@@ -428,6 +435,7 @@ func (cg *ConsumerGroup) topicConsumer(topic string, messages []chan<- *sarama.C
 		go cg.partitionConsumer(topic, pid.ID, streamMessages, errors, &wg, stopper)
 	}
 
+	cg.Logf("%s :: Stopping topic consumer, waiting for clean shutdown\n", topic)
 	myPartitionsMap := make(map[int32]bool)
 	for _, p := range myPartitions {
 		myPartitionsMap[p.ID] = true
@@ -441,6 +449,7 @@ func (cg *ConsumerGroup) topicConsumer(topic string, messages []chan<- *sarama.C
 // Consumes a partition
 func (cg *ConsumerGroup) partitionConsumer(topic string, partition int32, messages chan<- *sarama.ConsumerMessage, errors chan<- *sarama.ConsumerError, wg *sync.WaitGroup, stopper <-chan struct{}) {
 	defer wg.Done()
+	defer cg.Logf("%s/%d :: Returning from partitionConsumer", topic, partition)
 
 	select {
 	case <-stopper:
@@ -448,7 +457,9 @@ func (cg *ConsumerGroup) partitionConsumer(topic string, partition int32, messag
 	default:
 	}
 
-	for maxRetries, tries := 30, 0; tries < maxRetries; tries++ {
+	// Backoff to handle race condition. Must wait more than the 60s wait time from OffsetManager.FinalizePartition
+	// otherwise this would give up and that partition would no longer be claimed by any consumer.
+	for maxRetries, tries := 75, 0; tries < maxRetries; tries++ {
 		if err := cg.instance.ClaimPartition(topic, partition); err == nil {
 			break
 		} else if err == kazoo.ErrPartitionClaimedByOther && tries+1 < maxRetries {
@@ -514,6 +525,7 @@ func (cg *ConsumerGroup) partitionConsumer(topic string, partition int32, messag
 		cg.Logf("%s/%d :: FAILED to start partition consumer: %s\n", topic, partition, err)
 		return
 	}
+	defer cg.Logf("%s/%d :: Closed sarama consumer", topic, partition)
 	defer consumer.Close()
 
 	err = nil
