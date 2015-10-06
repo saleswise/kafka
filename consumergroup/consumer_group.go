@@ -435,7 +435,6 @@ func (cg *ConsumerGroup) topicConsumer(topic string, messages []chan<- *sarama.C
 		go cg.partitionConsumer(topic, pid.ID, streamMessages, errors, &wg, stopper)
 	}
 
-	cg.Logf("%s :: Stopping topic consumer, waiting for clean shutdown\n", topic)
 	myPartitionsMap := make(map[int32]bool)
 	for _, p := range myPartitions {
 		myPartitionsMap[p.ID] = true
