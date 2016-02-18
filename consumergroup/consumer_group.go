@@ -22,7 +22,8 @@ type Config struct {
 	Offsets struct {
 		Initial           int64         // The initial offset method to use if the consumer has no previously stored offset. Must be either sarama.OffsetOldest (default) or sarama.OffsetNewest.
 		ProcessingTimeout time.Duration // Time to wait for all the offsets for a partition to be processed after stopping to consume from it. Defaults to 1 minute.
-		CommitInterval    time.Duration // The interval between which the prossed offsets are commited.
+		CommitInterval    time.Duration // The interval between which the processed offsets are commited.
+		ResetOffsets      bool          // Resets the offsets for the consumergroup so that it won't resume from where it left off previously.
 	}
 }
 
@@ -178,6 +179,16 @@ func joinConsumerGroupWithStreams(name string, topics []string, topicStreams map
 	}
 
 	group := kz.Consumergroup(name)
+
+	if config.Offsets.ResetOffsets {
+		err = group.ResetOffsets()
+		if err != nil {
+			cg.Logf("FAILED to reset offsets of consumergroup: %s!\n", err)
+			kz.Close()
+			return
+		}
+	}
+
 	instance := group.NewInstance()
 
 	var consumer sarama.Consumer
